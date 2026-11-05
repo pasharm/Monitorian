@@ -316,126 +316,24 @@ public class NotifyIconContainer : IDisposable
 		if (_mouseWheel is null)
 		{
 			NotifyIcon.MouseMove -= OnMouseMove;
+			_wheelWatcher?.Stop();
 		}
 	}
+
+	private IconMouseWheelWatcher _wheelWatcher;
 
 	private void OnMouseMove(object sender, MouseEventArgs e)
 	{
-		ShowOverlayWindow();
-	}
-
-	private Window _window;
-	private ForegroundWindowWatcher _watcher;
-
-	private void ShowOverlayWindow()
-	{
-		if (_window?.Visibility is Visibility.Visible)
+		// NotifyIcon does not receive mouse wheel. While mouse pointer is over NotifyIcon,
+		// capture mouse wheel by a low-level mouse hook.
+		if (_wheelWatcher?.IsWatching is true)
 			return;
 
-		if (_window is null)
-		{
-			// Create a semi-transparent topmost Window.
-			_window = new Window
-			{
-				WindowStyle = WindowStyle.None,
-				AllowsTransparency = true,
-				Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(a: 1, 0, 0, 0)),
-				Topmost = true,
-				ShowActivated = false,
-				ShowInTaskbar = false,
-				Width = 1,
-				Height = 1,
-			};
+		if (!NotifyIconHelper.TryGetNotifyIconRect(NotifyIcon, out Rect iconRect))
+			return;
 
-			_window.MouseUp += OnWindowMouseUp;
-			_window.MouseDoubleClick += OnWindowMouseDoubleClick;
-			_window.MouseWheel += OnWindowMouseWheel;
-			_window.MouseLeave += OnWindowMouseLeave;
-			_window.Closed += OnWindowClosed;
-		}
-
-		if (NotifyIconHelper.TryGetNotifyIconRect(NotifyIcon, out Rect iconRect))
-		{
-			_window.ToolTip = Text;
-
-			if (WindowHelper.TryGetTaskbar(out _, out TaskbarAlignment taskbarAlignment))
-			{
-				var placement = taskbarAlignment switch
-				{
-					TaskbarAlignment.Top => System.Windows.Controls.Primitives.PlacementMode.Bottom,
-					_ => System.Windows.Controls.Primitives.PlacementMode.Top
-				};
-				System.Windows.Controls.ToolTipService.SetPlacement(_window, placement);
-			}
-
-			_window.Visibility = Visibility.Visible;
-			_window.Show();
-			WindowHelper.SetWindowPosition(_window, iconRect, false);
-
-			_watcher ??= new ForegroundWindowWatcher(() =>
-			{
-				if (_window is null)
-					return;
-
-				_window.Visibility = Visibility.Collapsed;
-				_watcher.RemoveHook();
-			});
-			_watcher.AddHook();
-		}
-
-		void OnWindowMouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
-		{
-			if (_window is null)
-				return;
-
-			var button = e.ChangedButton switch
-			{
-				System.Windows.Input.MouseButton.Left => MouseButtons.Left,
-				System.Windows.Input.MouseButton.Middle => MouseButtons.Middle,
-				System.Windows.Input.MouseButton.Right => MouseButtons.Right,
-				_ => default
-			};
-			OnMouseClick(sender, new MouseEventArgs(button, e.ClickCount, 0, 0, 0));
-		}
-
-		void OnWindowMouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
-		{
-			if (_window is null)
-				return;
-
-			OnMouseDoubleClick(sender, new MouseEventArgs(MouseButtons.Left, e.ClickCount, 0, 0, 0));
-		}
-
-		void OnWindowMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
-		{
-			if (_window is null)
-				return;
-
-			_mouseWheel?.Invoke(sender, e.Delta);
-		}
-
-		void OnWindowMouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
-		{
-			if (_window is null)
-				return;
-
-			_window.Visibility = Visibility.Collapsed;
-
-			// Changing WindowState of a Window which is Topmost will deactivate the app.
-			//_window.WindowState = WindowState.Minimized;
-		}
-
-		void OnWindowClosed(object sender, EventArgs e)
-		{
-			_window = null;
-
-			var window = (Window)sender;
-			window.MouseUp -= OnWindowMouseUp;
-			window.MouseDoubleClick -= OnWindowMouseDoubleClick;
-			window.MouseWheel -= OnWindowMouseWheel;
-			window.MouseLeave -= OnWindowMouseLeave;
-			window.Closed -= OnWindowClosed;
-		}
+		_wheelWatcher ??= new IconMouseWheelWatcher(delta => _mouseWheel?.Invoke(this, delta));
+		_wheelWatcher.Start(iconRect);
 	}
 
 	#endregion
@@ -465,8 +363,7 @@ public class NotifyIconContainer : IDisposable
 		{
 			_listener?.Close();
 			NotifyIcon.Dispose();
-			_window?.Close();
-			_watcher?.RemoveHook();
+			_wheelWatcher?.Dispose();
 		}
 
 		_isDisposed = true;
